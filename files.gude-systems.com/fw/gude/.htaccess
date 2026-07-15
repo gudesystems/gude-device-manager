@@ -1,3 +1,5 @@
+Options -MultiViews
+
 <IfModule mod_rewrite.c>
 RewriteEngine On
 RewriteRule ^software-gdm\.(json|html)$ software-gdm.php [L,QSA]
