@@ -1,0 +1,4 @@
+software-gdm_v*.zip
+software-gdm_v*.zip.lock
+.gdm-exe-*
+.gdm-zip-*
