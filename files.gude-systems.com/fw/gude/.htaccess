@@ -1,8 +1,0 @@
-Options -MultiViews
-
-<IfModule mod_rewrite.c>
-RewriteEngine On
-RewriteRule ^software-gdm\.(json|html)$ software-gdm.php [L,QSA]
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteRule ^software-gdm_v[^/]+\.zip$ software-gdm.php [L,QSA]
-</IfModule>
