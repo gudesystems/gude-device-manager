@@ -3,6 +3,9 @@ declare(strict_types=1);
 
 const GDM_REPO_API = 'https://api.github.com/repos/gudesystems/gude-device-manager/releases';
 const GDM_TITLE = 'GUDE Device Manager';
+const GDM_RELEASE_CACHE_TTL = 300;
+const GDM_API_ALERT_INTERVAL = 3600;
+const GDM_API_ALERT_EMAIL = 'fabian.neumann@gude-systems.com';
 
 function string_starts_with(string $value, string $prefix): bool
 {
@@ -22,7 +25,86 @@ function string_contains(string $value, string $needle): bool
     return $needle === '' || strpos($value, $needle) !== false;
 }
 
-function fetch_github_releases(): array
+function runtime_path(string $filename): string
+{
+    return __DIR__ . DIRECTORY_SEPARATOR . $filename;
+}
+
+function valid_release_list($value): bool
+{
+    return is_array($value)
+        && count($value) > 0
+        && is_array($value[0])
+        && isset($value[0]['tag_name']);
+}
+
+function load_release_cache(bool $freshOnly): ?array
+{
+    $path = runtime_path('.gdm-releases-cache.json');
+    clearstatcache(true, $path);
+    if (!is_file($path)) {
+        return null;
+    }
+    if ($freshOnly && time() - (int) filemtime($path) > GDM_RELEASE_CACHE_TTL) {
+        return null;
+    }
+
+    $body = file_get_contents($path);
+    if ($body === false) {
+        return null;
+    }
+    $decoded = json_decode($body, true);
+    return valid_release_list($decoded) ? $decoded : null;
+}
+
+function write_release_cache(array $releases): void
+{
+    $path = runtime_path('.gdm-releases-cache.json');
+    $temporary = tempnam(__DIR__, '.gdm-cache-');
+    if ($temporary === false) {
+        throw new RuntimeException('Unable to allocate release cache temporary file');
+    }
+
+    try {
+        $json = json_encode($releases, JSON_UNESCAPED_SLASHES);
+        if ($json === false || file_put_contents($temporary, $json . "\n", LOCK_EX) === false) {
+            throw new RuntimeException('Unable to write release cache');
+        }
+        chmod($temporary, 0644);
+        if (!rename($temporary, $path)) {
+            throw new RuntimeException('Unable to publish release cache');
+        }
+        $temporary = null;
+    } finally {
+        if (is_string($temporary) && is_file($temporary)) {
+            unlink($temporary);
+        }
+    }
+}
+
+function github_error_detail(string $body, string $transportError, int $status, array $responseHeaders): string
+{
+    $parts = [];
+    if ($transportError !== '') {
+        $parts[] = $transportError;
+    }
+    if ($status > 0) {
+        $parts[] = 'HTTP ' . $status;
+    }
+
+    $decoded = json_decode($body, true);
+    if (is_array($decoded) && isset($decoded['message'])) {
+        $parts[] = (string) $decoded['message'];
+    }
+    foreach (['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'retry-after'] as $name) {
+        if (isset($responseHeaders[$name])) {
+            $parts[] = $name . '=' . $responseHeaders[$name];
+        }
+    }
+    return implode('; ', $parts) ?: 'unknown error';
+}
+
+function fetch_github_releases_from_api(): array
 {
     $headers = [
         'Accept: application/vnd.github+json',
@@ -31,6 +113,7 @@ function fetch_github_releases(): array
     ];
 
     if (function_exists('curl_init')) {
+        $responseHeaders = [];
         $curl = curl_init(GDM_REPO_API);
         curl_setopt_array($curl, [
             CURLOPT_RETURNTRANSFER => true,
@@ -38,6 +121,15 @@ function fetch_github_releases(): array
             CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_TIMEOUT => 30,
             CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_HEADERFUNCTION => static function ($curlHandle, string $line) use (&$responseHeaders): int {
+                $length = strlen($line);
+                $separator = strpos($line, ':');
+                if ($separator !== false) {
+                    $name = strtolower(trim(substr($line, 0, $separator)));
+                    $responseHeaders[$name] = trim(substr($line, $separator + 1));
+                }
+                return $length;
+            },
         ]);
         $body = curl_exec($curl);
         $status = (int) curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
@@ -45,7 +137,10 @@ function fetch_github_releases(): array
         curl_close($curl);
 
         if ($body === false || $status < 200 || $status >= 300) {
-            throw new RuntimeException('GitHub API request failed: ' . ($error ?: 'HTTP ' . $status));
+            throw new RuntimeException(
+                'GitHub API request failed: '
+                . github_error_detail(is_string($body) ? $body : '', $error, $status, $responseHeaders)
+            );
         }
     } else {
         $context = stream_context_create([
@@ -62,10 +157,103 @@ function fetch_github_releases(): array
     }
 
     $decoded = json_decode($body, true);
-    if (!is_array($decoded)) {
+    if (!valid_release_list($decoded)) {
         throw new RuntimeException('GitHub API returned invalid JSON');
     }
     return $decoded;
+}
+
+function notify_github_api_error(Throwable $error, bool $usedStaleCache): void
+{
+    $statePath = runtime_path('.gdm-github-api-alert');
+    $lock = fopen($statePath . '.lock', 'c');
+    if ($lock === false) {
+        error_log('GDM feed could not create alert lock: ' . $error->getMessage());
+        return;
+    }
+
+    try {
+        if (!flock($lock, LOCK_EX)) {
+            error_log('GDM feed could not lock API alert state: ' . $error->getMessage());
+            return;
+        }
+        clearstatcache(true, $statePath);
+        if (is_file($statePath) && time() - (int) filemtime($statePath) < GDM_API_ALERT_INTERVAL) {
+            return;
+        }
+
+        $subject = '[GDM release feed] GitHub API error';
+        $body = implode("\n", [
+            'Time: ' . gmdate('c'),
+            'Host: ' . (gethostname() ?: 'unknown'),
+            'API: ' . GDM_REPO_API,
+            'Error: ' . $error->getMessage(),
+            'Stale cache served: ' . ($usedStaleCache ? 'yes' : 'no'),
+            '',
+            'Further alerts are suppressed for ' . GDM_API_ALERT_INTERVAL . ' seconds.',
+        ]);
+        $headers = implode("\r\n", [
+            'From: GDM Release Feed <noreply@gude-systems.com>',
+            'Content-Type: text/plain; charset=UTF-8',
+        ]);
+        $sendmailPath = trim((string) ini_get('sendmail_path'));
+        $mailAvailable = function_exists('mail')
+            && ($sendmailPath === '' || !string_contains($sendmailPath, '/dev/null'));
+        $sent = $mailAvailable && @mail(GDM_API_ALERT_EMAIL, $subject, $body, $headers);
+        file_put_contents($statePath, gmdate('c') . "\n" . $error->getMessage() . "\n", LOCK_EX);
+        chmod($statePath, 0644);
+        if (!$sent) {
+            $reason = $mailAvailable ? 'mail() failed' : 'mail transport unavailable';
+            error_log('GDM feed could not send GitHub API alert email (' . $reason . '): ' . $error->getMessage());
+        }
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+}
+
+function fetch_github_releases(): array
+{
+    $cached = load_release_cache(true);
+    if ($cached !== null) {
+        $GLOBALS['gdm_release_source'] = 'fresh-cache';
+        return $cached;
+    }
+
+    $lock = fopen(runtime_path('.gdm-releases-cache.lock'), 'c');
+    if ($lock === false) {
+        throw new RuntimeException('Unable to create release cache lock');
+    }
+
+    try {
+        if (!flock($lock, LOCK_EX)) {
+            throw new RuntimeException('Unable to lock release cache refresh');
+        }
+        $cached = load_release_cache(true);
+        if ($cached !== null) {
+            $GLOBALS['gdm_release_source'] = 'fresh-cache';
+            return $cached;
+        }
+
+        try {
+            $releases = fetch_github_releases_from_api();
+            write_release_cache($releases);
+            $GLOBALS['gdm_release_source'] = 'github-api';
+            return $releases;
+        } catch (Throwable $error) {
+            $stale = load_release_cache(false);
+            notify_github_api_error($error, $stale !== null);
+            if ($stale !== null) {
+                $GLOBALS['gdm_release_source'] = 'stale-cache';
+                error_log('GDM feed serving stale release cache: ' . $error->getMessage());
+                return $stale;
+            }
+            throw $error;
+        }
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
 }
 
 function version_from_release(array $release): string
@@ -446,6 +634,7 @@ try {
     $includePrereleases = isset($_GET['prereleases']) && $_GET['prereleases'] !== '0';
     $entries = build_entries($includePrereleases);
     $format = requested_format();
+    header('X-GDM-Release-Source: ' . ($GLOBALS['gdm_release_source'] ?? 'unknown'));
 
     if ($format === 'download') {
         $version = requested_download_version();
