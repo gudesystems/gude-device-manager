@@ -280,6 +280,53 @@ class OfflineDiscoveryTests(unittest.TestCase):
                     '192.0.2.3': None,
                 })
 
+    def test_dialog_settings_apply_to_status_and_update_without_saving(self):
+        self.addCleanup(os.chdir, Path.cwd())
+        os.chdir(self.directory.name)
+        host = '192.0.2.1:8443'
+        settings = {host: {'ssl': '1', 'auth': '1', 'username': 'dialog-user',
+                           'password': 'dialog-secret'},
+                    '192.0.2.99': {'auth': '0'}}
+        seen = []
+
+        def status(device, *args, **kwargs):
+            auth = device.get_http_auth()
+            seen.append((device.host, auth.username, auth.password))
+            return {'misc': {'prodid': '80xxR2', 'product_name': 'Test Device', 'firm_v': '1.7.0-R2'}}
+
+        gbl = Mock()
+        gbl.dstMAC = bytes.fromhex('0019320165a8')
+        with patch.object(upload, 'Gblib', return_value=gbl), \
+                patch.object(upload, 'req_get', side_effect=AssertionError('Internet used')), \
+                patch.object(DeployDev, 'get_config_filename', return_value=None), \
+                patch.object(DeployDev, 'http_get_status_json', autospec=True, side_effect=status), \
+                patch.object(DeployDev, 'http_get_config_json', return_value={'ipv4': {'hostname': 'test'}}), \
+                patch.object(DeployDev, 'update_firmware') as firmware, \
+                patch.object(DeployDev, 'reboot') as reboot:
+            for saved in (False, True):
+                ini = '[httpDefaults]\nauth = 1\nusername = old\npassword = old\n'
+                if saved:
+                    Path('upload.ini').write_text(ini)
+                for operation in ('status', 'update'):
+                    seen.clear()
+                    if operation == 'status':
+                        server._run_status_selected_async([host], host_settings=settings)
+                    else:
+                        server._run_update_selected_async([host], custom_firmware={host: '__no_update__'},
+                                                          host_settings=settings)
+                    self.assertEqual(set(seen), {('192.0.2.1', 'dialog-user', 'dialog-secret')})
+                    result = server.State.results[0]
+                    self.assertFalse(result.error_message)
+                    if operation == 'update':
+                        self.assertTrue(result.success)
+                    self.assertTrue(result.conn_ssl)
+                    self.assertEqual(result.conn_port, 8443)
+                    self.assertEqual(Path('upload.ini').read_text() if saved else None, ini if saved else None)
+                    if not saved:
+                        self.assertFalse(Path('upload.ini').exists())
+            firmware.assert_not_called()
+            reboot.assert_not_called()
+
     def test_force_upload_http_rejection_aborts_before_reboot(self):
         cfg = self.save_catalog()
         (Path(self.directory.name) / 'firmware-enc2111_v1.7.1.bin').write_bytes(b'test firmware')

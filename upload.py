@@ -635,6 +635,8 @@ def parse_args() -> Tuple[Namespace, ConfigParser, ConfigParser, str]:
     parser.add_argument('-o', '--onlineupdate', help='use online update files', action="store_true", default=False)
     parser.add_argument('--refresh-firmware-info', action='store_true',
                         help='Download and save firmware information, then exit without contacting devices')
+    parser.add_argument('--webui-port', type=int, metavar='PORT',
+                        help='Start the Web UI on a local port (1-65535; default without arguments: 8000)')
     parser.add_argument('-i', '--iprange', nargs="+",  help='range of ip address to manage')
     parser.add_argument('-sf', '--search_folder', help='folder to search for binary')
     parser.add_argument('-r', '--repl_prod_id', help='product ids to replace', default={'2110': '2111', '8221': '822x', '8226': '822x'}) # , '8221': '822x', '8226': '822x'
@@ -650,6 +652,14 @@ def parse_args() -> Tuple[Namespace, ConfigParser, ConfigParser, str]:
     parser.add_argument('--custom-config', type=json.loads, default=None, help='JSON mapping of ip->config_filename or "RESET" to override config file selection')
     parser.add_argument('--custom-ssl', type=json.loads, default=None, help='JSON mapping of ip->ssl_filename to override ssl cert selection')
     _args = parser.parse_args()
+    if _args.webui_port is not None:
+        if not 1 <= _args.webui_port <= 65535:
+            parser.error('--webui-port must be between 1 and 65535')
+        if any(arg != '--webui-port' and arg.startswith('-') and not arg.startswith('--webui-port=')
+               for arg in sys.argv[1:]):
+            parser.error('--webui-port cannot be combined with device operation options')
+        start_webui(_args.webui_port)
+        parser.exit(0)
     if _args.refresh_firmware_info:
         try:
             refresh_fw_infos()
@@ -1335,6 +1345,9 @@ def configure_auth_settings(_config: ConfigParser) -> None:
                  _config[section]['auth'] = '0' # Default to auth=0
 
 def main() -> None:
+    if len(sys.argv) <= 1:
+        start_webui()
+        return
     # get all args
     args, config, firmware, my_ip = parse_args()
 
@@ -1429,6 +1442,7 @@ def run_processing_from_options(
     gbl: bool = False,
     devices: Optional[Dict[str, Any]] = None,
     replace_hosts: bool = False,
+    host_settings: Optional[Dict[str, Dict[str, str]]] = None,
     forcefw: bool = False,
     repl_prod_id: Optional[Dict[str, str]] = None,
     configip: Optional[str] = None,
@@ -1499,6 +1513,14 @@ def run_processing_from_options(
 
     # Merge device overrides
     config = add_devices_to_config(args, config)
+
+    # Dialog connection settings apply in memory, without saving upload.ini.
+    selected_hosts = set((devices or {}).get('hosts', {}).values())
+    for host, settings in (host_settings if isinstance(host_settings, dict) else {}).items():
+        if host in selected_hosts and isinstance(settings, dict):
+            allowed = {key: str(value) for key, value in settings.items()
+                       if key in {'port', 'ssl', 'auth', 'username', 'password'}}
+            set_config_defaults(config, host, allowed, overwrite=True)
 
     # If devices contain host entries like "host:port", ensure a matching
     # section exists with the extracted port so iterate_list can apply it.
@@ -1572,14 +1594,16 @@ def run_processing_from_options(
     return results
 
 
-if __name__ == "__main__":  # Ensure this runs only when script is executed directly
-    # If no CLI arguments are given, launch the Web UI server and open browser
-    if len(sys.argv) <= 1:
-        try:
-            from webui.server import serve
-            # Bind only on localhost and open browser to localhost
-            serve(host='127.0.0.1', port=8000, open_browser=True)
-        except Exception as e:
-            print(f"Failed to start Web UI server: {e}")
-    else:
-        main()
+def start_webui(port: int = 8000) -> None:
+    from webui.server import serve
+    try:
+        serve(host='127.0.0.1', port=port, open_browser=True)
+    except OSError as exc:
+        print(f"Could not start Web UI at http://127.0.0.1:{port}: {exc}. "
+              "Check whether the port is in use or blocked, or select another port with --webui-port.",
+              file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+if __name__ == "__main__":
+    main()

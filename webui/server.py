@@ -205,6 +205,7 @@ def _run_update_selected_async(
     ssl_overrides: Optional[dict] = None,
     forcefw: bool = False,
     custom_firmware: Optional[dict] = None,
+    host_settings: Optional[dict] = None,
 ):
     try:
         State.running = True
@@ -242,6 +243,7 @@ def _run_update_selected_async(
 
             firmware_config=firmware_overrides,  # Pass overrides to upload logic
             custom_firmware=custom_firmware,     # Pass per-device firmware actions
+            host_settings=host_settings,
             custom_config=config_overrides,      # Pass config overrides
             custom_ssl=ssl_overrides             # Pass SSL overrides
         )
@@ -249,7 +251,7 @@ def _run_update_selected_async(
         State.running = False
 
 
-def _run_status_selected_async(hosts: list[str]):
+def _run_status_selected_async(hosts: list[str], host_settings: Optional[dict] = None):
     try:
         State.running = True
         State.progress = {}
@@ -267,7 +269,8 @@ def _run_status_selected_async(hosts: list[str]):
             forcefw=False,
             status=True,
             gbl=False,
-            device_concurrency=5
+            device_concurrency=5,
+            host_settings=host_settings,
         )
     finally:
         State.running = False
@@ -753,7 +756,9 @@ class Handler(BaseHTTPRequestHandler):
                 hosts = [str(x) for x in body['hosts']]
             
             if hosts:
-                t = threading.Thread(target=_run_status_selected_async, args=(hosts,), daemon=True)
+                State.running = True
+                t = threading.Thread(target=_run_status_selected_async,
+                                     args=(hosts, body.get('host_settings')), daemon=True)
                 t.start()
                 payload = {'running': True}
                 data = json.dumps(payload).encode('utf-8')
@@ -803,7 +808,8 @@ class Handler(BaseHTTPRequestHandler):
 
         t = threading.Thread(
             target=_run_update_selected_async,
-            args=(hosts, firmware_overrides, config_overrides, ssl_overrides, forcefw, custom_firmware),
+            args=(hosts, firmware_overrides, config_overrides, ssl_overrides, forcefw, custom_firmware,
+                  body.get('host_settings')),
             daemon=True,
         )
         t.start()

@@ -111,6 +111,19 @@ Update confirmation dialog:
 
 ![Update confirmation with selected actions](screenshots/sample_confirm-update-changes_model.png)
 
+## Choose the local Web UI port
+
+Starting without arguments opens the Web UI on port 8000. To use another port:
+
+```powershell
+.\gude-device-manager.exe --webui-port 8080
+python upload.py --webui-port 8080
+```
+
+The browser opens on the selected port. Valid ports are 1–65535. This option starts
+the Web UI and cannot be combined with device operation options. It changes the
+local manager port; device HTTP/HTTPS ports are configured in **Add Device**.
+
 ## Dev Release Pipeline (GitHub Actions)
 
 The repository includes a manual **dev release** workflow in `.github/workflows/dev-release.yml`.

@@ -337,7 +337,7 @@
                     <hr class="mb-0 navbar-vertical-divider">
                   </div>
                 </div>
-                <a class="nav-link" href="https://github.com/gudesystems/upload.py" target="_blank" rel="noopener"
+                <a class="nav-link" href="https://github.com/gudesystems/gude-device-manager" target="_blank" rel="noopener"
                   role="button">
                   <div class="d-flex align-items-center">
                     <span class="nav-link-icon">
@@ -349,7 +349,7 @@
                     <span class="nav-link-text ps-1">Online doc</span>
                   </div>
                 </a>
-                <a class="nav-link" href="https://github.com/gudesystems/upload.py/issues" target="_blank"
+                <a class="nav-link" href="https://github.com/gudesystems/gude-device-manager/issues" target="_blank"
                   rel="noopener" role="button">
                   <div class="d-flex align-items-center">
                     <span class="nav-link-icon">
@@ -364,7 +364,7 @@
               </li>
               <li class="nav-item mt-3 px-3 sidebar-meta">
                 <div class="fs-10 text-700">Product: GUDE Device Manager</div>
-                <div class="fs-10 text-700">Version: 0.0.5</div>
+                <div class="fs-10 text-700">Version: 0.0.6</div>
                 <div class="fs-10 text-600">(c) GUDE Systems</div>
               </li>
             </ul>
@@ -1475,6 +1475,7 @@
 
       // Add Device
       var addBtn = document.createElement('button');
+      addBtn.id = 'addDeviceBtn';
       addBtn.type = 'button';
       addBtn.className = 'btn fs-10 btn-outline-secondary fw-bold dt-toolbar-btn';
       addBtn.innerHTML = '<span class="fas fa-plus me-1"></span>Add Device';
@@ -1579,7 +1580,7 @@
       // Also update buttons state if needed, though they might be handled by run* functions locally
       // run* functions disable them, but if we refresh page while running, we want them disabled?
       // For now relying on run* functions for button state, spinner for global status.
-      const btns = ['findBtn', 'refreshBtn', 'updateBtn'];
+      const btns = ['findBtn', 'refreshBtn', 'updateBtn', 'addDeviceBtn'];
       btns.forEach(bid => {
         const b = document.getElementById(bid);
         if (b) b.disabled = isRunning;
@@ -1606,6 +1607,7 @@
     async function runRefresh(enableGbl = true) {
       if (typeof enableGbl !== 'boolean') enableGbl = true; // Default to true if event object passed
 
+      updateSpinner(true);
       try {
         const hosts = Array.from(selectedKeys);
         if (hosts.length > 0) {
@@ -1613,7 +1615,7 @@
           await fetch('/api/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hosts })
+            body: JSON.stringify({ hosts, host_settings: draftHostSettings })
           });
         } else {
           // Run global search/status
@@ -1632,6 +1634,9 @@
         }
       } catch (e) {
         console.error(e);
+        alert('Device status request failed: ' + e.message);
+      } finally {
+        updateSpinner(false);
       }
     }
 
@@ -1732,6 +1737,7 @@
         // Store payload for final execution
         pendingUpdateData = {
           hosts,
+          host_settings: draftHostSettings,
           firmware_overrides: overrides,
           custom_firmware: customFirmwareOverrides,
           config_overrides: confOverrides,
@@ -1916,7 +1922,7 @@
       document.getElementById('authFields').style.display = this.checked ? 'block' : 'none';
     });
 
-    function submitNewDevice() {
+    async function submitNewDevice() {
       const ipRaw = normalizeHostKey(document.getElementById('newDevIp').value);
       if (!ipRaw) { alert("IP is required"); return; }
 
@@ -1946,6 +1952,7 @@
       if (alreadySelected) {
         alert("Device already existed in the current device list. Stored dialog settings were updated.");
       }
+      await runRefresh(false);
     }
 
     function handleImport() {

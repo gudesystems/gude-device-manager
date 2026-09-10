@@ -150,6 +150,8 @@ tests/
 tests/*
 !tests/test_firmware_target.py
 !tests/test_offline_discovery.py
+!tests/test_add_device_browser.py
+!tests/test_webui_start.py
 tools/
 gude/_unnecessary_work.py
 gude/version.offline.ini
