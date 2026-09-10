@@ -1,4 +1,5 @@
 fw/*.bin
+fw/online-firmware.ini
 *.xlsx
 *.bak
 *.png
@@ -148,6 +149,7 @@ tests/
 !tests/
 tests/*
 !tests/test_firmware_target.py
+!tests/test_offline_discovery.py
 tools/
 gude/_unnecessary_work.py
 gude/version.offline.ini

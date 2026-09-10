@@ -27,9 +27,30 @@ gdm
 ### Quick Start (GUI)
 
 1. Click **Find Devices** to discover devices (GBL/UDP).
+   Use **Fetch Firmware Info** while connected to the Internet to save available
+   firmware versions, then run **Find Devices** to show them alongside the devices.
 2. Adjust row settings for **FW / Cfg / SSL** as needed.
 3. Click **Update** and review actions in the confirmation dialog.
 4. Confirm update execution.
+
+### Working without Internet access
+
+Device discovery, startup and status refresh do not fetch online firmware information.
+They work even if no firmware information has been saved yet. **Fetch Firmware Info**
+downloads the catalog separately and stores it in `fw/online-firmware.ini`, relative
+to the working directory. The date of the saved catalog is shown in the toolbar.
+It remains available after restarting the application; a failed download keeps the
+previous catalog and shows an error without blocking discovery.
+
+The catalog contains metadata, not firmware binaries. For firmware updates in an
+isolated network, prepare the `.bin` files in `fw/` or upload them through the GUI.
+Updates use the catalog version shown in the device list. A missing binary still
+requires an Internet connection when using online firmware selection.
+
+CLI: `gdm --refresh-firmware-info` saves the catalog and exits without contacting
+devices. `gdm --status --onlineupdate --gbl` discovers devices using the saved
+catalog without Internet access. Actual CLI updates with `--onlineupdate` fetch
+fresh firmware information as before.
 
 ### Current Device List vs Stored Device List
 
