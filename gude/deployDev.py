@@ -22,6 +22,7 @@ class DeployDev(HttpDevice):
         super().__init__(host, req_headers)
         self.fw = None
         self.firmware_upload_connection_error_info = None
+        self.firmware_upload_error = None
 
     @staticmethod
     def get_file_content(filename, read_opts="r"):
@@ -44,7 +45,7 @@ class DeployDev(HttpDevice):
             # If explicit name provided (e.g. via UI upload), treat as priority.
             # We assume it's in the same subdir (e.g. config/foo.txt) if it's just a filename.
             # If it's a full path, os.path.join handles it (on windows, absolute path triggers override behavior).
-            # But usually we just get the basename from the UI logic/upload.py.
+            # But usually we just get the basename from the UI or CLI entry logic.
             cfg_filename = os.path.join(subdir, explicit_filename)
             if os.path.exists(cfg_filename):
                  log.info(f"- Explicit match: {cfg_filename}")
@@ -87,6 +88,7 @@ class DeployDev(HttpDevice):
             self.firmware_upload_connection_error_info = str(e) # Store specific info
         except Exception as e:
             log.error(f"[{self.get_log_label()}] Other exception during firmware upload_file call: {e}")
+            self.firmware_upload_error = e
             self.firmware_upload_connection_error_info = f"Other upload error: {str(e)}"
         finally:
             log.info(f"[{self.get_log_label()}] Threaded firmware upload processing finished, setting self.fw to None.")
@@ -102,21 +104,13 @@ class DeployDev(HttpDevice):
 
         # Reset connection error info for this attempt
         self.firmware_upload_connection_error_info = None
+        self.firmware_upload_error = None
 
         if explicit_selection:
             latest_version = resolve_configured_firmware_version(prodid, filename_template, configured_version)
             fw_filename = filename_template
-        elif online_update:
-            # check online JSON for latest version
-            # check if subpath is used
-            if cfg.has_option(prodid, 'subpath'):
-                url = f"{cfg['url']['basepath']}/{cfg[prodid]['subpath']}/{cfg[prodid]['json']}"
-            else:
-                url = f"{cfg['url']['basepath']}/{cfg[prodid]['json']}"
-            log.info(f"[{self.get_log_label()}] downloading {url}")
-            latest_version = requests.get(url).json()[0]['version']
-            fw_filename = filename_template.replace('{version}', latest_version)
         else:
+            # Use the catalog version shown to the user, including saved offline metadata.
             latest_version = configured_version
             fw_filename = filename_template.replace('{version}', latest_version)
 
@@ -225,6 +219,9 @@ class DeployDev(HttpDevice):
             log.warning(f"[{self.get_log_label()}] Firmware upload thread did not complete within timeout after self.fw was set to None. It might be stuck.")
         else:
             log.debug("Firmware upload thread has joined.")
+
+        if self.firmware_upload_error is not None:
+            raise self.firmware_upload_error
 
         # Get final upload status if possible, or use last known
         try:

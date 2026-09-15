@@ -14,19 +14,20 @@ import logging
 log = logging.getLogger("webui")
 
 """
-Web UI server for the gude uploader.
+Web UI server for GUDE Device Manager.
 
 Enhancements:
 - Robust asset discovery for both source and PyInstaller one-file builds.
 - Optional auto-open of the default browser.
 """
 
-# Ensure repository root is on sys.path so we can import upload.py when running this file directly
+# Ensure repository root is on sys.path so we can import the entry module when running this file directly
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from upload import run_processing_from_options, DeviceResult, save_device_to_config, merge_ini_file, generate_ini_export, overwrite_ini_hosts
+from upload import load_cached_fw_infos, refresh_fw_infos
 
 
 class State:
@@ -204,6 +205,7 @@ def _run_update_selected_async(
     ssl_overrides: Optional[dict] = None,
     forcefw: bool = False,
     custom_firmware: Optional[dict] = None,
+    host_settings: Optional[dict] = None,
 ):
     try:
         State.running = True
@@ -227,9 +229,11 @@ def _run_update_selected_async(
             devices['hosts'][f'ip{idx}'] = str(h)
 
         State.results = run_processing_from_options(
-            upload_ini="no_upload.ini",
+            upload_ini="upload.ini",
+            replace_hosts=True,
             version_ini="no_version.ini",
             onlineupdate=True,
+            refresh_online_info=False,
             devices=devices,
             forcefw=bool(forcefw),
             status=False,
@@ -239,6 +243,7 @@ def _run_update_selected_async(
 
             firmware_config=firmware_overrides,  # Pass overrides to upload logic
             custom_firmware=custom_firmware,     # Pass per-device firmware actions
+            host_settings=host_settings,
             custom_config=config_overrides,      # Pass config overrides
             custom_ssl=ssl_overrides             # Pass SSL overrides
         )
@@ -246,7 +251,7 @@ def _run_update_selected_async(
         State.running = False
 
 
-def _run_status_selected_async(hosts: list[str]):
+def _run_status_selected_async(hosts: list[str], host_settings: Optional[dict] = None):
     try:
         State.running = True
         State.progress = {}
@@ -256,20 +261,36 @@ def _run_status_selected_async(hosts: list[str]):
             devices['hosts'][f'ip{idx}'] = str(h)
 
         State.results = run_processing_from_options(
-            upload_ini="no_upload.ini",
+            upload_ini="upload.ini",
+            replace_hosts=True,
             version_ini="no_version.ini",
             onlineupdate=True,
             devices=devices,
             forcefw=False,
             status=True,
             gbl=False,
-            device_concurrency=5
+            device_concurrency=5,
+            host_settings=host_settings,
         )
     finally:
         State.running = False
 
 
 class Handler(BaseHTTPRequestHandler):
+    def _api_refresh_firmware_info(self):
+        try:
+            cfg = refresh_fw_infos()
+            payload = {'ok': True, 'last_update': cfg.get('url', 'last_update')}
+            code = 200
+        except Exception as exc:
+            log.warning("Firmware information refresh failed: %s", exc)
+            payload = {'ok': False, 'error': 'Could not download or save firmware information. '
+                       'Check your Internet connection and write permissions. '
+                       'Previously saved information is retained; device discovery is still available.'}
+            code = 502
+        self._send(code, {"Content-Type": "application/json; charset=utf-8"})
+        self.wfile.write(json.dumps(payload).encode('utf-8'))
+
     def _send(self, code=200, headers=None):
         self.send_response(code)
         if headers:
@@ -302,13 +323,14 @@ class Handler(BaseHTTPRequestHandler):
         log.info("%s %s" % (self.address_string(), format % args))
 
     def _api_firmware(self):
-        fw_dir = ROOT / 'fw'
+        fw_dir = Path('fw')
         files = []
         if fw_dir.is_dir():
             for f in fw_dir.glob('*.bin'):
                 files.append({'name': f.name, 'size': f.stat().st_size})
         
-        payload = {'files': files}
+        cfg = load_cached_fw_infos()
+        payload = {'files': files, 'last_update': cfg.get('url', 'last_update', fallback=None)}
         data = json.dumps(payload, default=_json_default).encode('utf-8')
         self._send(200, {"Content-Type": "application/json; charset=utf-8"})
         self.wfile.write(data)
@@ -333,10 +355,10 @@ class Handler(BaseHTTPRequestHandler):
             return
             
         fn = os.path.basename(filename)
-        save_path = ROOT / 'fw' / fn
+        save_path = Path('fw') / fn
         
         # Ensure fw dir exists
-        (ROOT / 'fw').mkdir(exist_ok=True)
+        Path('fw').mkdir(exist_ok=True)
         
         # Read the entire body directly
         try:
@@ -622,6 +644,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if path == '/api/firmware/refresh':
+            return self._api_refresh_firmware_info()
         if path == '/api/update':
             return self._api_update()
         if path == '/api/run':
@@ -732,7 +756,9 @@ class Handler(BaseHTTPRequestHandler):
                 hosts = [str(x) for x in body['hosts']]
             
             if hosts:
-                t = threading.Thread(target=_run_status_selected_async, args=(hosts,), daemon=True)
+                State.running = True
+                t = threading.Thread(target=_run_status_selected_async,
+                                     args=(hosts, body.get('host_settings')), daemon=True)
                 t.start()
                 payload = {'running': True}
                 data = json.dumps(payload).encode('utf-8')
@@ -782,7 +808,8 @@ class Handler(BaseHTTPRequestHandler):
 
         t = threading.Thread(
             target=_run_update_selected_async,
-            args=(hosts, firmware_overrides, config_overrides, ssl_overrides, forcefw, custom_firmware),
+            args=(hosts, firmware_overrides, config_overrides, ssl_overrides, forcefw, custom_firmware,
+                  body.get('host_settings')),
             daemon=True,
         )
         t.start()

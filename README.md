@@ -1,6 +1,5 @@
-# upload.py
-`upload.py` is a Script-Tool that aims to automatically deploy firmware updates, 
-configuration and/or ssl certificates to multiple **Gude Systems GmbH PDU devices**
+# GUDE Device Manager
+GUDE Device Manager (GDM) automatically deploys firmware updates, configuration files, and SSL certificates to multiple **Gude Systems GmbH devices**.
 
 Firmware updates can be obtained automatically (by using `--onlineupdate`) or manually.
 
@@ -21,18 +20,39 @@ CLI logging defaults to informational messages. Add `--quiet` to show only warni
 
 ## Web UI (GUI)
 
-Running `upload.py` without CLI arguments starts the local Web UI (`http://127.0.0.1:8000`) and opens it in your browser:
+Running GDM without CLI arguments starts the local Web UI (`http://127.0.0.1:8000`) and opens it in your browser:
 
 ```shell
-python .\upload.py
+gdm
 ```
 
 ### Quick Start (GUI)
 
 1. Click **Find Devices** to discover devices (GBL/UDP).
+   Use **Fetch Firmware Info** while connected to the Internet to save available
+   firmware versions, then run **Find Devices** to show them alongside the devices.
 2. Adjust row settings for **FW / Cfg / SSL** as needed.
 3. Click **Update** and review actions in the confirmation dialog.
 4. Confirm update execution.
+
+### Working without Internet access
+
+Device discovery, startup and status refresh do not fetch online firmware information.
+They work even if no firmware information has been saved yet. **Fetch Firmware Info**
+downloads the catalog separately and stores it in `fw/online-firmware.ini`, relative
+to the working directory. The date of the saved catalog is shown in the toolbar.
+It remains available after restarting the application; a failed download keeps the
+previous catalog and shows an error without blocking discovery.
+
+The catalog contains metadata, not firmware binaries. For firmware updates in an
+isolated network, prepare the `.bin` files in `fw/` or upload them through the GUI.
+Updates use the catalog version shown in the device list. A missing binary still
+requires an Internet connection when using online firmware selection.
+
+CLI: `gdm --refresh-firmware-info` saves the catalog and exits without contacting
+devices. `gdm --status --onlineupdate --gbl` discovers devices using the saved
+catalog without Internet access. Actual CLI updates with `--onlineupdate` fetch
+fresh firmware information as before.
 
 ### Current Device List vs Stored Device List
 
@@ -92,6 +112,19 @@ Current device list changes:
 Update confirmation dialog:
 
 ![Update confirmation with selected actions](screenshots/sample_confirm-update-changes_model.png)
+
+## Choose the local Web UI port
+
+Starting without arguments opens the Web UI on port 8000. To use another port:
+
+```powershell
+.\gude-device-manager.exe --webui-port 8080
+python upload.py --webui-port 8080
+```
+
+The browser opens on the selected port. Valid ports are 1–65535. This option starts
+the Web UI and cannot be combined with device operation options. It changes the
+local manager port; device HTTP/HTTPS ports are configured in **Add Device**.
 
 ## Dev Release Pipeline (GitHub Actions)
 
@@ -163,10 +196,10 @@ Result:
     - e.g. `config/config_192_168_1_10.txt`
   - of otherwise, and if file exists, `config/config.txt` is deployed to each device
 - Prepare custom ssl certificate and save it under `ssl/`
-  - upload.py looks out for files `ssl/cert_[MAC_ADD].pem`, `ssl/cert_[IP].pem` or `cert.pem`, 
+  - GDM looks out for files `ssl/cert_[MAC_ADD].pem`, `ssl/cert_[IP].pem` or `cert.pem`,
   as described above with configuration files
     - e.g. `ssl/cert_00_19_32_00_00_01.pem` or `ssl/cert_192_168_1_10.pem` 
-- when the firmware is already up to date or updated, `upload.py` can also deploy device configuration 
+- when the firmware is already up to date or updated, GDM can also deploy device configuration
   and/or ssl certificates per device 
 
 ## Command Line Parameters
@@ -186,7 +219,7 @@ Result:
 | `-d`, `--devices`|               | overwrite upload.ini settings with JSON formatted device configuration
 | `-H`, `--header` |               | set custom HTTP headers as JSON formatted string
 
-Tip: run `python .\upload.py --help` for practical command examples shown directly in the CLI help output.
+Tip: run `gdm --help` for practical command examples shown directly in the CLI help output. From a source checkout, `python .\upload.py --help` still works for compatibility.
 
 ## Advanced Usage
 
@@ -195,7 +228,7 @@ Tip: run `python .\upload.py --help` for practical command examples shown direct
 With the new `-d` or `--devices` parameter, you can specify device configuration directly in JSON format without needing an upload.ini file:
 
 ```shell
-python upload.py --devices "{\"httpDefaults\":{\"username\":\"admin\",\"password\":\"admin\"}}"
+gdm --devices "{\"httpDefaults\":{\"username\":\"admin\",\"password\":\"admin\"}}"
 ```
 
 To completely avoid using upload.ini, specify a non-existent file with `--upload_ini`.
@@ -224,7 +257,7 @@ Upon completion, the script now provides a "Device Processing Summary" that give
 
 ## HTTPS / Authentication
 
-- `upload.py` is using HTTP to upload config and firmware
+- GDM uses HTTP to upload config and firmware
 - using HTTPS and user Authetification can be enabled in `upload.ini` 
 - either tweak `[httpDefaults]` or the appropriate device section like e.g. `[192.168.1.11]`
   - `ssl=1` enabled HTTPS
@@ -237,7 +270,7 @@ Upon completion, the script now provides a "Device Processing Summary" that give
 - Selected config: cli given by file `config\config_00_19_32_00_e8_b6.txt`
 
 ```shell
-python .\upload.py --iprange 10.113.6.66 --onlineupdate
+gdm --iprange 10.113.6.66 --onlineupdate
 2022-10-11 11:44:18,400 __main__           INFO     trying 10.113.6.66...
 2022-10-11 11:44:18,402 gude.deployDev     INFO     Searching .txt file, trying:
 2022-10-11 11:44:18,402 gude.deployDev     INFO     - config\config_00_19_32_00_e8_b6.txt
@@ -271,7 +304,7 @@ python .\upload.py --iprange 10.113.6.66 --onlineupdate
 
 
 ```shell
-python .\upload.py -u none -S -G -o
+gdm -u none -S -G -o
 2025-08-26 15:51:26,992 __main__           DEBUG    Parsing args ...
 2025-08-26 15:51:26,993 __main__           DEBUG    Reading none ...
 2025-08-26 15:51:26,993 __main__           DEBUG    Detected GBL search flag, adding to config ...

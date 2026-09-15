@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gude-upload-tool"
-version = "0.0.4.dev0"
-description = "A tool to automatically deploy firmware updates, configuration, and SSL certificates to Gude Systems GmbH PDU devices"
+name = "gude-device-manager"
+version = "0.0.6"
+description = "GUDE Device Manager deploys firmware updates, configuration, and SSL certificates to Gude Systems GmbH devices"
 readme = "README.md"
 requires-python = ">=3.7"
 license = {text = "Proprietary"}
@@ -36,9 +36,11 @@ package-mode = false
 
 [project.urls]
 "Homepage" = "https://www.gude-systems.com"
-"Bug Tracker" = "https://github.com/gudesystems/upload.py/issues"
+"Bug Tracker" = "https://github.com/gudesystems/gude-device-manager/issues"
 
 [project.scripts]
+gdm = "upload:main"
+gude-device-manager = "upload:main"
 gude-upload = "upload:main"
 
 [tool.setuptools]

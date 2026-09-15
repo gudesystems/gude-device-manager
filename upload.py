@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 from configparser import ConfigParser
+from configparser import Error as ConfigError
+from pathlib import Path
+import tempfile
 from datetime import date
 from argparse import ArgumentParser, Namespace, RawDescriptionHelpFormatter
 import os
@@ -29,6 +32,7 @@ import logging
 
 
 BASE_URL = "https://files.gude-systems.com/fw"
+FIRMWARE_CACHE = Path('fw/online-firmware.ini')
 
 
 log = logging.getLogger(__name__)
@@ -52,6 +56,34 @@ def log_config(debug: bool, quiet: bool) -> None:
     root.setLevel(level)
 
 
+def load_cached_fw_infos() -> ConfigParser:
+    """Read the last successful online catalog without making network requests."""
+    cfg = ConfigParser()
+    try:
+        cfg.read(FIRMWARE_CACHE, encoding='utf-8')
+    except (OSError, UnicodeError, ConfigError) as exc:
+        log.warning("Cannot read saved firmware information: %s", exc)
+        return ConfigParser()
+    return cfg
+
+
+def refresh_fw_infos() -> ConfigParser:
+    """Fetch and atomically persist a catalog; failures preserve the previous one."""
+    cfg = fetch_latest_fw_infos()
+    FIRMWARE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8',
+                                         dir=FIRMWARE_CACHE.parent, delete=False) as stream:
+            temporary = stream.name
+            cfg.write(stream)
+        os.replace(temporary, FIRMWARE_CACHE)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+    return cfg
+
+
 def fetch_latest_fw_infos(base_url: str   = BASE_URL) -> ConfigParser:
     """
     Return a ready-to-use ConfigParser whose layout matches
@@ -73,7 +105,11 @@ def fetch_latest_fw_infos(base_url: str   = BASE_URL) -> ConfigParser:
     """
     # --- download & decode --------------------------------------------------
     log.debug(f"Reading {base_url} ...")
-    payload: List[Dict[str, Any]] = req_get(base_url, timeout=30).json()
+    response = req_get(base_url, timeout=30)
+    response.raise_for_status()
+    payload: List[Dict[str, Any]] = response.json()
+    if not isinstance(payload, list) or not payload or not all(isinstance(e, dict) for e in payload):
+        raise ValueError("Invalid firmware catalog")
 
     # --- build config -------------------------------------------------------
     cfg = ConfigParser()
@@ -598,16 +634,16 @@ def parse_args() -> Tuple[Namespace, ConfigParser, ConfigParser, str]:
     :rtype: Tuple[Namespace, ConfigParser, ConfigParser, str]
     """
     parser = ArgumentParser(
-        description="Gude Systems firmware/config uploader (CLI + WebUI).",
+        description="GUDE Device Manager (GDM) for firmware, configuration, and certificate deployment.",
         formatter_class=RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
             "  1) List devices via UDP/GBL broadcast (status only):\n"
-            "     upload.py -S -G\n"
+            "     gdm -S -G\n"
             "  2) Update one device using online firmware:\n"
-            "     upload.py -o -i 192.168.2.99\n"
+            "     gdm -o -i 192.168.2.99\n"
             "  3) Start Web UI (no parameters):\n"
-            "     upload.py\n"
+            "     gdm\n"
         ),
     )
     parser.add_argument('-c', '--configip', help='ip address to select config')
@@ -615,6 +651,10 @@ def parse_args() -> Tuple[Namespace, ConfigParser, ConfigParser, str]:
     parser.add_argument('-u', '--upload_ini', help='upload.ini paramater set', default='upload.ini')
     parser.add_argument('-v', '--version_ini', help='fw version defs', default='version.ini')
     parser.add_argument('-o', '--onlineupdate', help='use online update files', action="store_true", default=False)
+    parser.add_argument('--refresh-firmware-info', action='store_true',
+                        help='Download and save firmware information, then exit without contacting devices')
+    parser.add_argument('--webui-port', type=int, metavar='PORT',
+                        help='Start the Web UI on a local port (1-65535; default without arguments: 8000)')
     parser.add_argument('-i', '--iprange', nargs="+",  help='range of ip address to manage')
     parser.add_argument('-sf', '--search_folder', help='folder to search for binary')
     parser.add_argument('-r', '--repl_prod_id', help='product ids to replace', default={'2110': '2111', '8221': '822x', '8226': '822x'}) # , '8221': '822x', '8226': '822x'
@@ -634,6 +674,21 @@ def parse_args() -> Tuple[Namespace, ConfigParser, ConfigParser, str]:
     verbosity.add_argument('--quiet', action='store_true', default=False, help='turn off info log messages')
     _args = parser.parse_args()
     log_config(_args.debug, _args.quiet)
+    if _args.webui_port is not None:
+        if not 1 <= _args.webui_port <= 65535:
+            parser.error('--webui-port must be between 1 and 65535')
+        if any(arg not in ('--webui-port', '--quiet', '--debug') and arg.startswith('-') and not arg.startswith('--webui-port=')
+               for arg in sys.argv[1:]):
+            parser.error('--webui-port cannot be combined with device operation options')
+        start_webui(_args.webui_port)
+        parser.exit(0)
+    if _args.refresh_firmware_info:
+        try:
+            refresh_fw_infos()
+        except Exception as exc:
+            parser.exit(1, f"Could not download or save firmware information: {exc}\n"
+                        "Previously saved information is retained; local discovery remains available.\n")
+        parser.exit(0, "Firmware information saved for offline use.\n")
 
     log.debug(f"Reading {_args.upload_ini} ...")
     _config = ConfigParser(strict=False)
@@ -667,7 +722,7 @@ def parse_args() -> Tuple[Namespace, ConfigParser, ConfigParser, str]:
          unique_bin_infos = file_search.get_unique_devices(bin_infos)
          _firmware = file_search.get_config(unique_bin_infos, config=_firmware)
     elif _args.onlineupdate:
-        _firmware = fetch_latest_fw_infos()
+        _firmware = load_cached_fw_infos() if _args.status else refresh_fw_infos()
     else:
         log.debug(f"Reading {os.path.join(_config['defaults']['fwdir'], _args.version_ini)} ...")
         _firmware.read(os.path.join(_config['defaults']['fwdir'], _args.version_ini))
@@ -891,6 +946,7 @@ def iterate_list(
                 pass
 
     def _process_device(ip_str_or_obj: Any) -> DeviceResult:
+        device_firmware = _firmware
         ip = str(ip_str_or_obj) # Ensure ip is a string for consistency
         job_id = job_id_map.get(ip) if show_job_id else None
         result = DeviceResult(ip=ip, product_name="unknown", mac="unknown", initial_firmware="unknown", job_id=job_id)
@@ -948,9 +1004,10 @@ def iterate_list(
             # Apply to device
             dev.set_http_port(port, use_ssl)
             dev.set_log_job_id(job_id)
-            dev.set_basic_auth(_config.getboolean(config_key, 'auth', fallback=False),
-                               _config.get(config_key, 'username', fallback=''),
-                               _config.get(config_key, 'password', fallback=''))
+            dev.set_basic_auth(
+                _config.getboolean(config_key, 'auth', fallback=_config.getboolean('httpDefaults', 'auth', fallback=False)),
+                _config.get(config_key, 'username', fallback=_config.get('httpDefaults', 'username', fallback='')),
+                _config.get(config_key, 'password', fallback=_config.get('httpDefaults', 'password', fallback='')))
             dev.set_http_timeout(float(_config.get('defaults', 'httpTimeout', fallback=3.0)))
             dev.set_http_retries(0)
 
@@ -1063,12 +1120,22 @@ def iterate_list(
 
             # --- before logging/deploy ---
             actual_prod_id = device_data['prodid']
+            if custom_firmware_val and not skip_firmware_update:
+                # Keep each device's explicit selection independent of the online catalog
+                # and of other devices sharing a firmware family in concurrent runs.
+                device_firmware = ConfigParser(strict=False)
+                device_firmware.read_dict(_firmware)
+                device_firmware[actual_prod_id] = {
+                    'filename': custom_firmware_val,
+                    'version': resolve_configured_firmware_version(
+                        actual_prod_id, custom_firmware_val, '') or '',
+                }
             # Build replacement map (if provided via args)
             repl_map = _args.repl_prod_id if isinstance(getattr(_args, 'repl_prod_id', None), dict) else None
             selected_prod_id, selected_version = resolve_prodid(
                 actual_prodid=actual_prod_id,
                 product_name=device_data.get('product_name') or '',
-                firmware_cfg=_firmware,
+                firmware_cfg=device_firmware,
                 repl_map=repl_map,
             )
             # Offline fallback: if resolved section has no local file, try compatible
@@ -1077,13 +1144,13 @@ def iterate_list(
                 fw_dir_default = _config.get('defaults', 'fwdir', fallback='fw')
                 fallback_prodid = find_offline_compatible_prodid(
                     selected_prodid=selected_prod_id,
-                    firmware_cfg=_firmware,
+                    firmware_cfg=device_firmware,
                     fw_dir_default=fw_dir_default,
                 )
                 if fallback_prodid:
                     log.info(f"[{dev.get_log_label()}] Offline fallback: using compatible firmware section '{fallback_prodid}' instead of '{selected_prod_id}'")
                     selected_prod_id = fallback_prodid
-                    selected_version = _firmware.get(selected_prod_id, 'version', fallback=selected_version)
+                    selected_version = device_firmware.get(selected_prod_id, 'version', fallback=selected_version)
                     if result.firmware_upload_notes:
                         result.firmware_upload_notes += f"; offline fallback -> {selected_prod_id}"
                     else:
@@ -1093,14 +1160,14 @@ def iterate_list(
                 device_data["prodid"] = selected_prod_id # Update prodid for update_firmware call
                 # Track selected product id for summary/use
                 result.selected_prodid = selected_prod_id
-                target_filename = _firmware.get(selected_prod_id, 'filename', fallback='').strip()
+                target_filename = device_firmware.get(selected_prod_id, 'filename', fallback='').strip()
                 result.target_is_custom = is_explicit_firmware_selection(target_filename)
                 effective_target_version = selected_version
                 if result.target_is_custom:
                     effective_target_version = resolve_configured_firmware_version(
                         selected_prod_id,
                         target_filename,
-                        _firmware.get(selected_prod_id, 'version', fallback=''),
+                        device_firmware.get(selected_prod_id, 'version', fallback=''),
                     )
                 disp_version = format_firmware_version_for_display(selected_prod_id, effective_target_version) or target_filename or "unknown"
                 result.latest_known_firmware = disp_version
@@ -1108,10 +1175,10 @@ def iterate_list(
                 try:
                     if result.target_is_custom:
                         result.latest_publish_date = None
-                    elif _args.onlineupdate and _firmware.has_option(selected_prod_id, 'date'):
-                        result.latest_publish_date = _firmware.get(selected_prod_id, 'date')
-                    elif _firmware.has_section('url') and _firmware.has_option('url', 'last_update'):
-                        result.latest_publish_date = _firmware.get('url', 'last_update')
+                    elif _args.onlineupdate and device_firmware.has_option(selected_prod_id, 'date'):
+                        result.latest_publish_date = device_firmware.get(selected_prod_id, 'date')
+                    elif device_firmware.has_section('url') and device_firmware.has_option('url', 'last_update'):
+                        result.latest_publish_date = device_firmware.get('url', 'last_update')
                 except Exception:
                     result.latest_publish_date = None
                 firmware_label = "selected target" if result.target_is_custom else "latest known"
@@ -1136,15 +1203,15 @@ def iterate_list(
             if skip_firmware_update:
                 log.info(f"[{dev.get_log_label()}] Firmware update skipped by user request (No Update).")
                 result.firmware_status = "Skipped (No Update)"
-            elif selected_prod_id and selected_prod_id in _firmware: # Check if selected_prod_id is valid for _firmware
+            elif selected_prod_id and selected_prod_id in device_firmware: # Check if selected_prod_id is valid for device_firmware
                 # Check for explicit no-update flag
-                target_filename = _firmware.get(selected_prod_id, 'filename', fallback='')
+                target_filename = device_firmware.get(selected_prod_id, 'filename', fallback='')
                 if target_filename == '__no_update__':
                      log.info(f"[{dev.get_log_label()}] Firmware update skipped by user request (No Update).")
                      result.firmware_status = "Skipped (No Update)"
                 else:
                     try:
-                        fw_update_result = dev.update_firmware(device_data, _firmware,
+                        fw_update_result = dev.update_firmware(device_data, device_firmware,
                                                            _config.get('defaults', 'fwdir', fallback='fw'),
                                                            forced=_args.forcefw,
                                                            online_update=_args.onlineupdate,
@@ -1155,9 +1222,11 @@ def iterate_list(
                         result.firmware_upload_notes = fw_update_result.get("upload_notes")
                     except ValueError as ve_fw: # Catches firmware file not found etc. from update_firmware
                         result.firmware_status = f"failed: {str(ve_fw)}"
+                        result.error_message = f"Firmware update failed: {ve_fw}"
                         log.warning(f"[{dev.get_log_label()}] Skipped firmware update: {ve_fw}")
                     except Exception as e_fw_update: # Catch any other unexpected error during update_firmware
                         result.firmware_status = f"failed: unexpected error during update ({str(e_fw_update)})"
+                        result.error_message = f"Firmware update failed: {e_fw_update}"
                         log.error(f"[{dev.get_log_label()}] Unexpected error during firmware update: {e_fw_update}", exc_info=True)
 
             # Factory Reset Processing
@@ -1298,6 +1367,10 @@ def configure_auth_settings(_config: ConfigParser) -> None:
                  _config[section]['auth'] = '0' # Default to auth=0
 
 def main() -> None:
+    if len(sys.argv) <= 1:
+        log_config(debug=False, quiet=False)
+        start_webui()
+        return
     # get all args
     args, config, firmware, my_ip = parse_args()
 
@@ -1384,12 +1457,15 @@ def run_processing_from_options(
     upload_ini: str = 'upload.ini',
     version_ini: str = 'version.ini',
     onlineupdate: bool = False,
+    refresh_online_info: bool = True,
     iprange: Optional[List[str]] = None,
     search_folder: Optional[str] = None,
     header: Optional[Dict[str, str]] = None,
     status: bool = False,
     gbl: bool = False,
     devices: Optional[Dict[str, Any]] = None,
+    replace_hosts: bool = False,
+    host_settings: Optional[Dict[str, Dict[str, str]]] = None,
     forcefw: bool = False,
     repl_prod_id: Optional[Dict[str, str]] = None,
     configip: Optional[str] = None,
@@ -1403,6 +1479,8 @@ def run_processing_from_options(
     """
     Programmatic entry-point to run the processing without CLI.
 
+    Status requests always use saved online metadata. For updates, callers can
+    set refresh_online_info=False to use the same catalog as the displayed status.
     Returns a list of DeviceResult for consumption by a web UI or API.
     """
     # Build a pseudo-args namespace compatible with iterate_list expectations
@@ -1432,6 +1510,9 @@ def run_processing_from_options(
     config = ConfigParser(strict=False)
     read_files = config.read(args.upload_ini)
     args.upload_ini_found = bool(read_files)
+    if replace_hosts:
+        # WebUI actions retain connection settings but target only selected hosts.
+        config.remove_section('hosts')
     if not args.upload_ini_found:
         has_host_overrides = (
             isinstance(args.devices, dict) and
@@ -1455,6 +1536,14 @@ def run_processing_from_options(
 
     # Merge device overrides
     config = add_devices_to_config(args, config)
+
+    # Dialog connection settings apply in memory, without saving upload.ini.
+    selected_hosts = set((devices or {}).get('hosts', {}).values())
+    for host, settings in (host_settings if isinstance(host_settings, dict) else {}).items():
+        if host in selected_hosts and isinstance(settings, dict):
+            allowed = {key: str(value) for key, value in settings.items()
+                       if key in {'port', 'ssl', 'auth', 'username', 'password'}}
+            set_config_defaults(config, host, allowed, overwrite=True)
 
     # If devices contain host entries like "host:port", ensure a matching
     # section exists with the extracted port so iterate_list can apply it.
@@ -1488,7 +1577,7 @@ def run_processing_from_options(
         unique_bin_infos = file_search.get_unique_devices(bin_infos)
         firmware = file_search.get_config(unique_bin_infos, config=firmware)
     elif args.onlineupdate:
-        firmware = fetch_latest_fw_infos()
+        firmware = load_cached_fw_infos() if status or not refresh_online_info else refresh_fw_infos()
     else:
         log.debug(f"[web] Reading {os.path.join(config['defaults']['fwdir'], args.version_ini)} ...")
         firmware.read(os.path.join(config['defaults']['fwdir'], args.version_ini))
@@ -1528,15 +1617,16 @@ def run_processing_from_options(
     return results
 
 
-if __name__ == "__main__":  # Ensure this runs only when script is executed directly
-    # If no CLI arguments are given, launch the Web UI server and open browser
-    if len(sys.argv) <= 1:
-        log_config(debug=False, quiet=False)
-        try:
-            from webui.server import serve
-            # Bind only on localhost and open browser to localhost
-            serve(host='127.0.0.1', port=8000, open_browser=True)
-        except Exception as e:
-            print(f"Failed to start Web UI server: {e}")
-    else:
-        main()
+def start_webui(port: int = 8000) -> None:
+    from webui.server import serve
+    try:
+        serve(host='127.0.0.1', port=port, open_browser=True)
+    except OSError as exc:
+        print(f"Could not start Web UI at http://127.0.0.1:{port}: {exc}. "
+              "Check whether the port is in use or blocked, or select another port with --webui-port.",
+              file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+if __name__ == "__main__":
+    main()

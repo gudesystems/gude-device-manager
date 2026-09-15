@@ -31,7 +31,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='gude-upload',
+    name='gude-device-manager',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

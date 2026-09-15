@@ -87,8 +87,8 @@ jobs:
         id: asset
         shell: pwsh
         run: |
-          $assetName = "gude-upload-${{ steps.bump.outputs.ui_version }}-windows-x64.exe"
-          Copy-Item -Path "dist/gude-upload.exe" -Destination $assetName -Force
+          $assetName = "gude-device-manager-${{ steps.bump.outputs.ui_version }}-windows-x64.exe"
+          Copy-Item -Path "dist/gude-device-manager.exe" -Destination $assetName -Force
           "name=$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Generate detailed release notes
@@ -161,7 +161,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.bump.outputs.tag }}
-          name: gude-upload-${{ steps.bump.outputs.ui_version }}
+          name: gude-device-manager-${{ steps.bump.outputs.ui_version }}
           target_commitish: dev
           prerelease: true
           generate_release_notes: false

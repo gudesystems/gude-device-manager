@@ -5,7 +5,7 @@
   <meta charset="utf-8" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Gude Devices</title>
+  <title>GUDE Device Manager</title>
   <link rel="icon" type="image/svg+xml" href="/assets/gude_only-logo.svg">
   <link href="/assets/dataTables.bootstrap5.min.css" rel="stylesheet" />
   <link href="/assets/simplebar.min.css" rel="stylesheet" />
@@ -337,7 +337,7 @@
                     <hr class="mb-0 navbar-vertical-divider">
                   </div>
                 </div>
-                <a class="nav-link" href="https://github.com/gudesystems/upload.py" target="_blank" rel="noopener"
+                <a class="nav-link" href="https://github.com/gudesystems/gude-device-manager" target="_blank" rel="noopener"
                   role="button">
                   <div class="d-flex align-items-center">
                     <span class="nav-link-icon">
@@ -349,7 +349,7 @@
                     <span class="nav-link-text ps-1">Online doc</span>
                   </div>
                 </a>
-                <a class="nav-link" href="https://github.com/gudesystems/upload.py/issues" target="_blank"
+                <a class="nav-link" href="https://github.com/gudesystems/gude-device-manager/issues" target="_blank"
                   rel="noopener" role="button">
                   <div class="d-flex align-items-center">
                     <span class="nav-link-icon">
@@ -363,9 +363,9 @@
                 </a>
               </li>
               <li class="nav-item mt-3 px-3 sidebar-meta">
-                <div class="fs-10 text-700">Product: Gude Upload</div>
-                <div class="fs-10 text-700">Version: 0.0.4-dev</div>
-                <div class="fs-10 text-600">© Gude Systems</div>
+                <div class="fs-10 text-700">Product: GUDE Device Manager</div>
+                <div class="fs-10 text-700">Version: 0.0.6</div>
+                <div class="fs-10 text-600">(c) GUDE Systems</div>
               </li>
             </ul>
           </div>
@@ -471,7 +471,7 @@
           </ul>
         </nav>
         <div class="card mb-3">
-          <div class="card-header d-flex flex-between-center">
+          <div class="card-header d-flex flex-between-center flex-wrap">
             <h5 class="mb-0">Devices</h5>
           </div>
           <div id="draftBanner" class="alert alert-warning mx-3 mt-3 mb-0 py-2 draft-banner" role="alert">
@@ -1056,6 +1056,10 @@
         if (res.ok) {
           const data = await res.json();
           availableFirmwareFiles = data.files || [];
+          const info = document.getElementById('firmwareInfoStatus');
+          if (info) info.textContent = data.last_update
+            ? 'Firmware information saved: ' + data.last_update
+            : 'No saved online firmware information. Local firmware files can still be selected and uploaded.';
           // Trigger re-render if we have rows
           if (lastResults.length > 0) {
             render(lastResults);
@@ -1398,8 +1402,25 @@
       }
     }
 
+    async function refreshFirmwareInfo() {
+      const btn = document.getElementById('firmwareInfoBtn');
+      const info = document.getElementById('firmwareInfoStatus');
+      btn.disabled = true;
+      info.textContent = 'Downloading firmware information...';
+      try {
+        const res = await fetch('/api/firmware/refresh', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Firmware information download failed.');
+        info.textContent = 'Firmware information saved: ' + data.last_update + '. Use Find Devices to update the list.';
+      } catch (e) {
+        info.textContent = e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     function injectToolbarButtons() {
-      if (document.getElementById('refreshBtn')) return;
+      if (document.getElementById('findBtn')) return;
 
       // Move buttons to the Card Header for better layout stability
       // Target the card header which contains the "Devices" title
@@ -1435,6 +1456,14 @@
       searchBtn.innerHTML = '<svg class="fas svg-h-8 me-2" aria-hidden="true" focusable="false" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="currentColor" d="M505 442.7L405.3 343c28.4-34.9 45.7-79.5 45.7-128C451 96.5 354.5 0 231 0S11 96.5 11 215s96.5 215 220 215c48.5 0 93.1-17.3 128-45.7L442.7 505c9.4 9.4 24.6 9.4 33.9 0l28.3-28.3c9.5-9.4 9.5-24.6.1-33.9zM231 367c-83.7 0-152-68.3-152-152S147.3 63 231 63s152 68.3 152 152-68.3 152-152 152z"></path></svg>Find Devices';
       searchBtn.onclick = runFind;
 
+      var firmwareInfoBtn = document.createElement('button');
+      firmwareInfoBtn.id = 'firmwareInfoBtn';
+      firmwareInfoBtn.type = 'button';
+      firmwareInfoBtn.className = 'btn fs-10 btn-outline-secondary fw-bold dt-toolbar-btn';
+      firmwareInfoBtn.textContent = 'Fetch Firmware Info';
+      firmwareInfoBtn.title = 'Download and save firmware information for offline use (Internet required)';
+      firmwareInfoBtn.onclick = refreshFirmwareInfo;
+
       // Refresh
       var runBtn = document.createElement('button');
       runBtn.id = 'refreshBtn';
@@ -1446,6 +1475,7 @@
 
       // Add Device
       var addBtn = document.createElement('button');
+      addBtn.id = 'addDeviceBtn';
       addBtn.type = 'button';
       addBtn.className = 'btn fs-10 btn-outline-secondary fw-bold dt-toolbar-btn';
       addBtn.innerHTML = '<span class="fas fa-plus me-1"></span>Add Device';
@@ -1478,6 +1508,7 @@
 
       // Add to group
       btnGroup.appendChild(searchBtn);
+      btnGroup.appendChild(firmwareInfoBtn);
       //btnGroup.appendChild(runBtn);
       btnGroup.appendChild(addBtn);
       btnGroup.appendChild(importBtn);
@@ -1485,6 +1516,12 @@
       btnGroup.appendChild(updBtn);
 
       container.appendChild(btnGroup);
+
+      var firmwareInfoStatus = document.createElement('div');
+      firmwareInfoStatus.id = 'firmwareInfoStatus';
+      firmwareInfoStatus.className = 'small text-muted w-100 mt-2 order-last';
+      firmwareInfoStatus.setAttribute('role', 'status');
+      container.appendChild(firmwareInfoStatus);
 
       // Spinner
       var spinDiv = document.createElement('div');
@@ -1543,7 +1580,7 @@
       // Also update buttons state if needed, though they might be handled by run* functions locally
       // run* functions disable them, but if we refresh page while running, we want them disabled?
       // For now relying on run* functions for button state, spinner for global status.
-      const btns = ['findBtn', 'refreshBtn', 'updateBtn'];
+      const btns = ['findBtn', 'refreshBtn', 'updateBtn', 'addDeviceBtn'];
       btns.forEach(bid => {
         const b = document.getElementById(bid);
         if (b) b.disabled = isRunning;
@@ -1570,6 +1607,7 @@
     async function runRefresh(enableGbl = true) {
       if (typeof enableGbl !== 'boolean') enableGbl = true; // Default to true if event object passed
 
+      updateSpinner(true);
       try {
         const hosts = Array.from(selectedKeys);
         if (hosts.length > 0) {
@@ -1577,7 +1615,7 @@
           await fetch('/api/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hosts })
+            body: JSON.stringify({ hosts, host_settings: draftHostSettings })
           });
         } else {
           // Run global search/status
@@ -1596,6 +1634,9 @@
         }
       } catch (e) {
         console.error(e);
+        alert('Device status request failed: ' + e.message);
+      } finally {
+        updateSpinner(false);
       }
     }
 
@@ -1643,13 +1684,8 @@
           }
 
           if (fwAction !== 'onlineupdate' && fwAction !== '__no_update__' && fwAction) {
-            const modelID = modelMap[ip];
-            if (modelID) {
-              overrides[modelID] = {
-                "filename": fwAction,
-                "version": "custom_selection_" + new Date().getTime()
-              };
-            }
+            // Bind explicit files to devices, even when no online catalog is available.
+            customFirmwareOverrides[ip] = fwAction;
           } else if (fwAction === '__no_update__') {
             // Per-device skip flag so "No Update" is honored even when online update is enabled.
             customFirmwareOverrides[ip] = '__no_update__';
@@ -1701,6 +1737,7 @@
         // Store payload for final execution
         pendingUpdateData = {
           hosts,
+          host_settings: draftHostSettings,
           firmware_overrides: overrides,
           custom_firmware: customFirmwareOverrides,
           config_overrides: confOverrides,
@@ -1885,7 +1922,7 @@
       document.getElementById('authFields').style.display = this.checked ? 'block' : 'none';
     });
 
-    function submitNewDevice() {
+    async function submitNewDevice() {
       const ipRaw = normalizeHostKey(document.getElementById('newDevIp').value);
       if (!ipRaw) { alert("IP is required"); return; }
 
@@ -1915,6 +1952,7 @@
       if (alreadySelected) {
         alert("Device already existed in the current device list. Stored dialog settings were updated.");
       }
+      await runRefresh(false);
     }
 
     function handleImport() {

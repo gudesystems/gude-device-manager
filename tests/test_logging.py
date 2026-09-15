@@ -41,13 +41,18 @@ def test_conflicting_flags_fail_before_processing():
     assert 'not allowed with argument' in result.stderr
 
 
-def test_webui_start_configures_logging():
-    script = '''
+@pytest.mark.parametrize('options,visible', [
+    ([], True),
+    (['--webui-port', '8080', '--debug'], True),
+    (['--webui-port', '8080', '--quiet'], False),
+])
+def test_webui_start_configures_logging(options, visible):
+    script = f'''
 import logging
 import runpy
 import sys
 from unittest.mock import patch
-sys.argv = ['upload.py']
+sys.argv = ['upload.py'] + {options!r}
 def serve(**kwargs):
     logging.getLogger('webui').info('webui-started')
 with patch('webui.server.serve', side_effect=serve):
@@ -56,4 +61,4 @@ with patch('webui.server.serve', side_effect=serve):
     result = subprocess.run([sys.executable, '-c', script], cwd=ROOT,
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
-    assert result.stderr.count('webui-started') == 1
+    assert result.stderr.count('webui-started') == int(visible)

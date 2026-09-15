@@ -1,0 +1,12 @@
+Options -MultiViews
+
+<FilesMatch "^\.gdm-">
+Require all denied
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule ^gdm\.(json|html)$ gdm.php [L,QSA]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteRule ^gdm_v[^/]+\.zip$ gdm.php [L,QSA]
+</IfModule>

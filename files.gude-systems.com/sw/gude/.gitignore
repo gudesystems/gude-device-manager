@@ -1,0 +1,9 @@
+gdm_v*.zip
+gdm_v*.zip.lock
+.gdm-exe-*
+.gdm-zip-*
+.gdm-cache-*
+.gdm-releases-cache.json
+.gdm-releases-cache.lock
+.gdm-github-api-alert
+.gdm-github-api-alert.lock
