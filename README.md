@@ -17,6 +17,8 @@ Device configuration and ssl certificates, can be prepared beforehand.
 
 There are two options to set individual commands either via **Command Line Parameters** or via `upload.ini`-config file.
 
+CLI logging defaults to informational messages. Add `--quiet` to show only warnings and errors, or `--debug` for detailed diagnostics, including HTTP requests. These flags cannot be combined.
+
 ## Web UI (GUI)
 
 Running `upload.py` without CLI arguments starts the local Web UI (`http://127.0.0.1:8000`) and opens it in your browser:

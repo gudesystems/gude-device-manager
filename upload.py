@@ -26,11 +26,32 @@ import re
 from gude import file_search
 
 import logging
-logging.basicConfig(format='%(asctime)s %(name)-18s %(levelname)-8s %(message)s')
-log = logging.getLogger(__name__)  # custom logger name can be set
-log.setLevel(logging.getLevelName('DEBUG'))
+
 
 BASE_URL = "https://files.gude-systems.com/fw"
+
+
+log = logging.getLogger(__name__)
+
+
+def log_config(debug: bool, quiet: bool) -> None:
+    """Configure console logging for both the CLI and application modules."""
+    root = logging.getLogger()
+    for existing in list(root.handlers):
+        if getattr(existing, '_gude_console', False):
+            root.removeHandler(existing)
+            existing.close()
+    handler = logging.StreamHandler(stream=sys.stderr)
+    handler._gude_console = True
+    formatter = logging.Formatter(
+        fmt='%(asctime)s %(name)-18s %(levelname)-8s %(message)s')
+    handler.setFormatter(formatter)
+    level = logging.DEBUG if debug else logging.WARNING if quiet else logging.INFO
+    handler.setLevel(level)
+    root.addHandler(handler)
+    root.setLevel(level)
+
+
 def fetch_latest_fw_infos(base_url: str   = BASE_URL) -> ConfigParser:
     """
     Return a ready-to-use ConfigParser whose layout matches
@@ -310,7 +331,7 @@ def find_offline_compatible_prodid(
 def add_devices_to_config(_args: Namespace, _config: ConfigParser) -> ConfigParser:
     """
     Add devices from command line args to the config parser object
-    
+
     :param _args: Parsed command line arguments
     :param _config: Configuration parser object
     :return: Modified configuration parser object
@@ -325,7 +346,7 @@ def add_devices_to_config(_args: Namespace, _config: ConfigParser) -> ConfigPars
 def set_config_defaults(_config: ConfigParser, section: str, settings: dict, overwrite: bool = False) -> None:
     """
     Function to set default configuration values for a section.
-    
+
     :param _config: Configuration parser object to be edited
     :param section: Section name to apply settings to
     :param settings: Dictionary of default settings to apply
@@ -333,7 +354,7 @@ def set_config_defaults(_config: ConfigParser, section: str, settings: dict, ove
     """
     if not _config.has_section(section):
         _config[section] = {}
-    
+
     for key, value in settings.items():
         if overwrite or not _config.has_option(section, key):
             _config[section][key] = str(value)
@@ -358,7 +379,7 @@ DEFAULT_SETTINGS = {
 def save_device_to_config(section: str, settings: dict, filename: str = 'upload.ini') -> None:
     """
     Save or update a device configuration in the INI file.
-    
+
     :param section: The section name (e.g. IP address)
     :param settings: Dictionary of settings for the section
     :param filename: The INI file to update
@@ -366,15 +387,15 @@ def save_device_to_config(section: str, settings: dict, filename: str = 'upload.
     config = ConfigParser(strict=False)
     # Preserve case of keys? ConfigParser defaults to lowercase keys.
     # To preserve case, we'd need: config.optionxform = str
-    
+
     if os.path.exists(filename):
         config.read(filename)
-    
+
     # Ensure hosts section exists and add the device key if it's an IP
     # We follow the pattern: Section [IP] exists -> add IP to [hosts] as ipX=IP
     if 'hosts' not in config:
         config['hosts'] = {}
-    
+
     # Check if section already exists in hosts values to avoid duplication
     # or if we need to add a new ipN key
     known_hosts = set(config['hosts'].values())
@@ -389,35 +410,35 @@ def save_device_to_config(section: str, settings: dict, filename: str = 'upload.
 
     if section not in config:
         config[section] = {}
-    
+
     for k, v in settings.items():
         if v is not None:
              config[section][k] = str(v)
-             
+
     with open(filename, 'w') as f:
         config.write(f)
 
 def merge_ini_file(content: str, target_filename: str = 'upload.ini') -> None:
     """
     Merge content from an uploaded INI file into the target INI file.
-    
+
     :param content: String content of the uploaded INI
     :param target_filename: The local INI file to merge into
     """
     target = ConfigParser(strict=False)
     if os.path.exists(target_filename):
         target.read(target_filename)
-        
+
     source = ConfigParser(strict=False)
     source.read_string(content)
-    
+
     # Merge hosts
     if 'hosts' not in target:
         target['hosts'] = {}
 
     # existing target host values
     existing_hosts = set(target['hosts'].values())
-    
+
     # next index for target
     existing_keys = [k for k in target['hosts'].keys() if k.startswith('ip') and k[2:].isdigit()]
     next_idx = 1
@@ -431,25 +452,25 @@ def merge_ini_file(content: str, target_filename: str = 'upload.ini') -> None:
                 target['hosts'][f'ip{next_idx}'] = v
                 existing_hosts.add(v)
                 next_idx += 1
-                
+
     # Merge other sections
     for section in source.sections():
         if section == 'hosts':
             continue
-            
+
         if section not in target:
             target[section] = {}
-        
+
         for k, v in source[section].items():
             target[section][k] = v
-            
+
     with open(target_filename, 'w') as f:
         target.write(f)
 
 def generate_ini_export(selected_keys: List[str] = None, export_all: bool = False, source_filename: str = 'upload.ini') -> str:
     """
     Generate an INI string for export.
-    
+
     :param selected_keys: List of section names (IPs) to include
     :param export_all: If True, export all devices found in [hosts]
     :param source_filename: Source INI file
@@ -458,39 +479,39 @@ def generate_ini_export(selected_keys: List[str] = None, export_all: bool = Fals
     source = ConfigParser(strict=False)
     if os.path.exists(source_filename):
         source.read(source_filename)
-        
+
     export = ConfigParser(strict=False)
     export['hosts'] = {}
-    
+
     # Determine which devices to export
     devices_to_export = []
-    
+
     if export_all and 'hosts' in source:
         # Add all explicitly listed hosts
         for k, v in source['hosts'].items():
-            # Skip comments or special keys like gbl if purely exporting devices? 
-            # Or export everything? 
+            # Skip comments or special keys like gbl if purely exporting devices?
+            # Or export everything?
             # Request says "export option to export an upload.ini... (using elements selected...)"
             # User later said "create new ini (based on devices available in webpage)"
-            if k.startswith('ip') or k.startswith('net'): 
+            if k.startswith('ip') or k.startswith('net'):
                 devices_to_export.append(v)
             elif k == 'gbl':
                  export['hosts']['gbl'] = v
     elif selected_keys:
         devices_to_export = selected_keys
-        
+
     # Add devices to export [hosts] and copy their sections
     export_idx = 1
     for dev in devices_to_export:
         export['hosts'][f'ip{export_idx}'] = dev
         export_idx += 1
-        
+
         # Copy section if it exists
         if source.has_section(dev):
             export[dev] = {}
             for k, v in source[dev].items():
                 export[dev][k] = v
-                
+
     # Copy defaults/httpDefaults if they exist, as they are useful context
     for common in ['defaults', 'httpDefaults']:
         if source.has_section(common):
@@ -512,7 +533,7 @@ def overwrite_ini_hosts(
     Overwrite the [hosts] section of the INI file with the provided list of hosts.
     Preserves other sections like [defaults], [httpDefaults], and specific device sections if they exist.
     Optionally updates per-host section settings for hosts present in the provided list.
-    
+
     :param hosts_list: List of IP strings (or IP:Port) to set as the new hosts list.
     :param host_settings: Optional map of host -> settings dict to write into host sections.
     :param filename: The INI file to update.
@@ -520,17 +541,17 @@ def overwrite_ini_hosts(
     config = ConfigParser(strict=False)
     if os.path.exists(filename):
         config.read(filename)
-        
+
     # Clear existing hosts section or create if missing
     if 'hosts' not in config:
         config['hosts'] = {}
     else:
-        # We want to clear keys in [hosts] but ConfigParser doesn't have clear(), 
+        # We want to clear keys in [hosts] but ConfigParser doesn't have clear(),
         # so we recreate the section or remove options.
         # Simplest is to remove section and re-add, but that might change order in file (usually fine).
         config.remove_section('hosts')
         config.add_section('hosts')
-        
+
     # Add new hosts
     idx = 1
     for h in hosts_list:
@@ -550,7 +571,7 @@ def overwrite_ini_hosts(
             if v is None:
                 continue
             config[host][str(k)] = str(v)
-        
+
     # Note: We do NOT remove sections for devices that are no longer in the list.
     # The request was to "overwrite the old ini" regarding the SELECTION (device list).
     # Cleaning up unused sections is complex (is it unused or just not in the list currently?).
@@ -558,7 +579,7 @@ def overwrite_ini_hosts(
     # However, if the user says "so if i select no device at all the upload ini also will be empty",
     # they probably mean the DEVICE LIST is empty. The config sections are less visible.
     # Let's stick to updating [hosts].
-        
+
     with open(filename, 'w') as f:
         config.write(f)
 
@@ -576,7 +597,6 @@ def parse_args() -> Tuple[Namespace, ConfigParser, ConfigParser, str]:
         - _my_ip - parsed own IP
     :rtype: Tuple[Namespace, ConfigParser, ConfigParser, str]
     """
-    log.debug("Parsing args ...")
     parser = ArgumentParser(
         description="Gude Systems firmware/config uploader (CLI + WebUI).",
         formatter_class=RawDescriptionHelpFormatter,
@@ -609,7 +629,11 @@ def parse_args() -> Tuple[Namespace, ConfigParser, ConfigParser, str]:
     parser.add_argument('--firmware-config', type=json.loads, default=None, help='JSON mapping of model->{filename, version} to override version.ini')
     parser.add_argument('--custom-config', type=json.loads, default=None, help='JSON mapping of ip->config_filename or "RESET" to override config file selection')
     parser.add_argument('--custom-ssl', type=json.loads, default=None, help='JSON mapping of ip->ssl_filename to override ssl cert selection')
+    verbosity = parser.add_mutually_exclusive_group()
+    verbosity.add_argument('--debug', action='store_true', default=False, help='turn on debug log messages')
+    verbosity.add_argument('--quiet', action='store_true', default=False, help='turn off info log messages')
     _args = parser.parse_args()
+    log_config(_args.debug, _args.quiet)
 
     log.debug(f"Reading {_args.upload_ini} ...")
     _config = ConfigParser(strict=False)
@@ -743,7 +767,7 @@ def generate_ip_list(_hosts_config: ConfigParser, _my_ip: str, _gbl_timeout: flo
                      num_hosts = 1
 
             except ValueError: # Handles hostnames or invalid IP/network strings
-                log.warning(f"{target} could not be parsed as IPAddress or IP-Network by 'ipaddress' library, "
+                log.info(f"{target} could not be parsed as IPAddress or IP-Network by 'ipaddress' library, "
                             f"treating as a single host identifier (e.g., hostname or IP string).")
                 _ip_list.append(target) # Add as is (could be hostname or IP string)
                 num_hosts = 1
@@ -754,24 +778,24 @@ def generate_ip_list(_hosts_config: ConfigParser, _my_ip: str, _gbl_timeout: flo
 
     # Remove duplicates that might have occurred
     _ip_list = sorted(list(set(_ip_list)))
-    
+
     # Advanced dedup: remove 'IP' if 'IP:PORT' exists
     # This prevents duplicates when GBL finds '1.2.3.4' but config has '1.2.3.4:80'
     final_list = []
     ip_map = {} # ip -> list of original strings
-    
+
     for item in _ip_list:
-        # Handle IPv4 primarily. IPv6 in simple logic might fail split(':') if not careful, 
-        # but code mostly handles IPv4. 
+        # Handle IPv4 primarily. IPv6 in simple logic might fail split(':') if not careful,
+        # but code mostly handles IPv4.
         if item.count(':') == 1:
              ip_part = item.split(':')[0]
         else:
              ip_part = item
-             
+
         if ip_part not in ip_map:
             ip_map[ip_part] = []
         ip_map[ip_part].append(item)
-        
+
     for ip_part, items in ip_map.items():
         has_port_variant = any(':' in i for i in items)
         if has_port_variant:
@@ -782,7 +806,7 @@ def generate_ip_list(_hosts_config: ConfigParser, _my_ip: str, _gbl_timeout: flo
                     final_list.append(i)
         else:
              final_list.extend(items)
-             
+
     return sorted(final_list)
 
 
@@ -871,7 +895,7 @@ def iterate_list(
         job_id = job_id_map.get(ip) if show_job_id else None
         result = DeviceResult(ip=ip, product_name="unknown", mac="unknown", initial_firmware="unknown", job_id=job_id)
         emit({"type": "device_start", "ip": ip, "job_id": job_id})
-        
+
         def append_status_note(note: str) -> None:
             """Append an additional action summary to the visible per-device status text."""
             if not note:
@@ -882,7 +906,7 @@ def iterate_list(
             if note in result.firmware_status:
                 return
             result.firmware_status = f"{result.firmware_status}; {note}"
-        
+
         try:
             log.debug(f"[{format_device_log_label(ip, job_id=job_id)}] Processing device")
 
@@ -995,7 +1019,7 @@ def iterate_list(
             result.mac = mac
 
             log.debug(f"[{dev.get_log_label()}] Getting config filename for MAC {mac}, IP {ip}...")
-            
+
             # Check for custom config override
             custom_config_map = getattr(_args, 'custom_config', None) or {}
             # Try to find match by IP (exact or host:port if matches dev.host)
@@ -1008,9 +1032,9 @@ def iterate_list(
 
             # Pass explicit_filename if we have one (not RESET, and not None)
             cfg_filename = DeployDev.get_config_filename('config', 'config', 'txt', mac, ip, _args.configip, explicit_filename=explicit_config_file)
-            
+
             log.debug(f"[{dev.get_log_label()}] Getting SSL certificate filename for MAC {mac}, IP {ip}...")
-            
+
             # Check for custom ssl override
             custom_ssl_map = getattr(_args, 'custom_ssl', None) or {}
             custom_ssl_val = custom_ssl_map.get(ip)
@@ -1118,7 +1142,7 @@ def iterate_list(
                 if target_filename == '__no_update__':
                      log.info(f"[{dev.get_log_label()}] Firmware update skipped by user request (No Update).")
                      result.firmware_status = "Skipped (No Update)"
-                else: 
+                else:
                     try:
                         fw_update_result = dev.update_firmware(device_data, _firmware,
                                                            _config.get('defaults', 'fwdir', fallback='fw'),
@@ -1153,7 +1177,7 @@ def iterate_list(
                      result.error_message = f"Factory reset failed: {e_reset}"
 
             # Deploy Configuration
-            # Skip config upload if we just did a factory reset? 
+            # Skip config upload if we just did a factory reset?
             # Usually yes, unless user wants a specific config AFTER reset.
             # But the UI flow suggests either Reset OR Config, not both.
             if cfg_filename is not None and not factory_reset_requested:
@@ -1329,7 +1353,7 @@ def main() -> None:
         # Label initial firmware: show "current" for status-only runs, otherwise "previous"
         initial_label = 'current' if getattr(res_item, 'status_only', False) else 'previous'
         device_fw = [f"{res_item.initial_firmware}({initial_label})"]
-        
+
         if res_item.final_firmware and res_item.final_firmware != res_item.initial_firmware:
             device_fw.append(f"{res_item.final_firmware}(current)")
         else:
@@ -1339,17 +1363,17 @@ def main() -> None:
                 # Prefer per-version publish date when available (esp. onlineupdate)
                 last_update = res_item.latest_publish_date if res_item.latest_publish_date else (firmware["url"]["last_update"] if firmware.has_section("url") and firmware.has_option("url", "last_update") else "known")
                 device_fw.append(f"{res_item.latest_known_firmware}(latest {last_update})")
-            
+
         log.info(", ".join(device_info))
         log.info("   FW: "+", ".join(device_fw))
-        
+
         if res_item.firmware_status:
             log.info(f"   Status: {res_item.firmware_status}")
         if res_item.firmware_upload_notes:
             log.info(f"   Notes: {res_item.firmware_upload_notes}")
         if res_item.error_message:
             log.info(f"   Error: {res_item.error_message}")
-    
+
     log.info("-" * 80)
     success_count = sum(1 for r_item in processing_results if r_item.success)
     log.info(f"Successfully processed {success_count} of {len(processing_results)} devices (based on overall success flag).")
@@ -1468,7 +1492,7 @@ def run_processing_from_options(
     else:
         log.debug(f"[web] Reading {os.path.join(config['defaults']['fwdir'], args.version_ini)} ...")
         firmware.read(os.path.join(config['defaults']['fwdir'], args.version_ini))
-    
+
     # Apply firmware overrides if provided
     # Structure: {"80xx": {"filename": "my_firmware.bin", "version": "custom"}}
     if firmware_config:
@@ -1480,13 +1504,13 @@ def run_processing_from_options(
                 # But for 'filename' override it might be enough if code only looks up filename.
                 # However, resolve_prodid uses specific logic.
                 firmware.add_section(model_section)
-            
+
             for k, v in overrides.items():
                 firmware.set(model_section, k, str(v))
-            
+
             # Identify if we're forcing a specific file, ensure path/logic holds
             # deployDev uses 'filename' from this config.
-            # It also checks 'version' to decide if update is needed. 
+            # It also checks 'version' to decide if update is needed.
             # If we set 'version' to 'force_update_custom', it likely triggers update.
 
     # Determine own IP for GBL/UDP search
@@ -1507,6 +1531,7 @@ def run_processing_from_options(
 if __name__ == "__main__":  # Ensure this runs only when script is executed directly
     # If no CLI arguments are given, launch the Web UI server and open browser
     if len(sys.argv) <= 1:
+        log_config(debug=False, quiet=False)
         try:
             from webui.server import serve
             # Bind only on localhost and open browser to localhost

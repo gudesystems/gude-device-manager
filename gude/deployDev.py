@@ -15,7 +15,6 @@ from gude.gblib import print_progress_bar
 import logging
 # logging.basicConfig(format='%(asctime)s %(name)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)  # custom logger name can be set
-log.setLevel(logging.getLevelName('DEBUG'))
 
 
 class DeployDev(HttpDevice):
@@ -71,7 +70,7 @@ class DeployDev(HttpDevice):
                     log.info(f"- {cfg_filename}")
         if not os.path.exists(cfg_filename):
             cfg_filename = None
-            log.warning(f"Could not find {file_ext} file.")
+            log.info(f"Could not find {file_ext} file.")
         else:
             log.info(f"Found: {cfg_filename}")
 

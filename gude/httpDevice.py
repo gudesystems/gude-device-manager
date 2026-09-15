@@ -10,7 +10,6 @@ from gude.gblib import print_progress_bar
 import logging
 # logging.basicConfig(format='%(asctime)s %(name)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)  # custom logger name can be set
-log.setLevel(logging.getLevelName('INFO'))
 
 
 class HttpDevice(DeviceValues):
